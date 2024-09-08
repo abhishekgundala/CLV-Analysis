@@ -1,0 +1,1312 @@
+---
+title: "Datamining-AB"
+author: "Abhishek Gundala"
+date: "2023-10-28"
+output:
+  html_document:
+    css: styles.css
+    code_folding: show
+    anchor_sections: true
+    toc: true
+
+---
+```{css, echo=FALSE}
+body {
+  background-color: #10101010; 
+  color: #333333; 
+}
+.fold-show::before {
+  content: 'Show Code';
+}
+.fold-hide::before {
+  content: 'Hide Code';
+}
+
+```
+
+# Load all necessary Libraries
+
+```{r}
+library(tidyverse)  # Integration
+library(dplyr)      # Manipulation
+library(ggplot2)    # Visualization
+library(cluster)    # Clustering
+library(lubridate)  # Dates
+library(caret)      # Modeling
+library(factoextra) # Visualization (specifically for factor analysis and clustering)
+library(arules)     # Association
+library(arulesViz)  # Visualization (specifically for association rules)
+library(reshape2)   # Reshaping
+library(gridExtra)  # Layout
+
+set.seed(123)       # for reproducible results
+
+```
+
+
+# Loading the dataset and viewing the first few rows
+
+
+```{r}
+
+# Load the dataset
+dataset <- read.csv("kz.csv")
+
+# Viewing the first few rows of the dataset
+head(dataset)
+
+```
+
+
+# Initial structure of the dataset
+
+```{r}
+# Basic structure of the dataset
+str(dataset)
+
+
+```
+# Basic Summary stats
+
+```{r}
+# Summary statistics
+summary(dataset)
+```
+# Counting Missing values, NA values and Empty values in columns - (Brand and Category_code) & Removing duplicate rows
+
+
+```{r warning=FALSE}
+# Function to count all types of missing values
+count_missing <- function(x) {
+  sum(is.na(x) | x == "" | x == "NA" | x == "NULL" | x == " ")
+}
+
+# Count missing values again after replacement
+missing_values <- sapply(dataset, count_missing)
+
+# Print the number of missing values per column
+print(missing_values)
+
+# Remove duplicate rows
+dataset <- dataset[!duplicated(dataset), ]
+
+# Count and print the number of duplicate rows after removal
+num_duplicate_rows <- sum(duplicated(dataset))
+print(num_duplicate_rows)
+
+
+```
+
+The category_code column has 28,737 missing values and the brand column has 5,428 missing values. The other columns do not have any missing values. 
+
+
+#Converting the event time to POSIXct for further analysis
+
+```{r}
+# Convert event_time from Factor to character
+dataset$event_time <- as.character(dataset$event_time)
+
+# Then convert from character to POSIXct with the proper format and timezone
+# Replace the format string with the actual format of our event_time if it's different
+dataset$event_time <- as.POSIXct(dataset$event_time, format = "%Y-%m-%d %H:%M:%S UTC", tz = "UTC")
+
+```
+
+#Replacing brand and category code to Generic to assume the BRAND and Category of the product to be "non branded" or possible variety of products in "E-commerce websites"
+
+
+```{r}
+
+
+
+# Convert 'brand' and 'category_code' to character type
+dataset$brand <- as.character(dataset$brand)
+dataset$category_code <- as.character(dataset$category_code)
+
+# Replacing NA and empty values in 'brand' and 'category_code' with 'Generic'
+dataset$brand[is.na(dataset$brand) | !nzchar(dataset$brand)] <- "Generic"
+dataset$category_code[is.na(dataset$category_code) | !nzchar(dataset$category_code)] <- "Generic"
+
+# Dropping the 'column_name' variable
+dataset <- dataset[ , !(names(dataset) %in% c("column_name"))]
+
+# Viewing the first few rows to verify changes
+head(dataset)
+
+
+
+
+```
+
+# Bar Plot Generation for Key Columns
+
+
+```{r}
+
+
+# Function to create a bar plot for a given column
+create_bar_plot <- function(column, dataset) {
+  if (!is.numeric(dataset[[column]])) {
+    # Handling missing values
+    dataset <- dataset %>% filter(!is.na(.[[column]]))
+
+    # Preparing data
+    top_data <- dataset %>%
+      count(!!sym(column)) %>%
+      arrange(desc(n)) %>%  
+      head(30)
+
+    # Creating the plot
+    p <- ggplot(top_data, aes_string(x = column, y = "n")) +
+      geom_bar(stat = "identity", fill = "orange") +
+      ggtitle(paste('Top 30 Bar Plot of', column)) +
+      xlab(column) +
+      ylab("Count") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+    print(p)
+  }
+}
+
+# Apply the function to 'brand' and 'category_code'
+for (column in c("brand", "category_code")) {
+  create_bar_plot(column, dataset)
+}
+
+```
+ The above bar plots represent the frequency counts of two different categorical variables: brand and category_code 
+ Bar plot of brand shows the top 30 brands based on their frequency count. Each bar represents a unique brand, and the number of occurrences 
+ Bar plot of category_code visualizes the top 30 category codes. Similar to the first plot, each bar represents a category code, and how many times that category appears 
+
+# Histogram Generation for Price
+
+```{r}
+
+
+# Histogram for the 'price' variable
+ggplot(dataset, aes(x = price)) + 
+    geom_histogram(bins = 1000, fill = "blue", color = "blue") +
+    theme_minimal() +
+    labs(title = "Distribution of Price", x = "Price", y = "Count")
+
+```
+
+
+#Histogram for Numeric Variables: To understand the distribution of numeric variables like price.
+Enhancing Price Data Visualization
+
+```{r}
+
+dataset$price[dataset$price == 0] <- mean(dataset$price[dataset$price > 0], na.rm = TRUE) # Replace with mean
+
+# Calculate mean or median again after replacing zeros
+mean_price <- mean(dataset$price, na.rm = TRUE)
+median_price <- median(dataset$price, na.rm = TRUE)
+
+# Create histogram without log scale
+histogram_original <- ggplot(dataset, aes(x = price)) + 
+    geom_histogram(binwidth = 500, fill = "skyblue", color = "darkblue") +
+    geom_vline(xintercept = mean_price, color = "red", linetype = "dashed", size = 1) +
+    theme_minimal(base_size = 8) +
+    labs(title = "Distribution of Price",
+         subtitle = paste("Mean price:", round(mean_price, 2)),
+         x = "Price", 
+         y = "Count") +
+    theme(plot.title = element_text(size = 14, face = "bold"),
+          plot.subtitle = element_text(size = 12))
+
+# Create histogram with log scale and adjust binwidth
+histogram_log <- ggplot(dataset, aes(x = price)) + 
+    geom_histogram(fill = "skyblue", color = "darkblue") + # Removed binwidth to let ggplot2 decide
+    geom_vline(xintercept = mean_price, color = "red", linetype = "dashed", size = 1) +
+    scale_x_log10() + # Apply log scale to the x-axis
+    theme_minimal(base_size = 8) +
+    labs(title = "Log Distribution of Price",
+         subtitle = paste("Mean price:", round(mean_price, 2)),
+         x = "Log(Price)", 
+         y = "Count") +
+    theme(plot.title = element_text(size = 14, face = "bold"),
+          plot.subtitle = element_text(size = 12))
+
+# Combine the two histograms with a suitable aspect ratio
+combined_histograms <- grid.arrange(histogram_original, histogram_log, ncol = 2, heights = c(1, 1))
+
+# Save the combined histograms to a file with a larger size
+ggsave("combined_histograms.png", combined_histograms, width = 12, height = 6, dpi = 300)
+
+
+```
+
+
+Replacing Zero Prices: It first replaces zero values in the price column with the mean of non-zero prices.
+Recomputing Mean and Median: After this replacement, it calculates the new mean and median prices.
+Histogram Creation (Original and Log Scale): Two histograms are created to visualize the distribution of prices. The first histogram is on the original scale, and the second is on a logarithmic scale. Both histograms highlight the mean price with a dashed red line.
+Combining Histograms: These histograms are then combined side by side for comparative visualization.
+Saving the Combined Histograms: Finally, the combined histograms are saved as a high-resolution image (combined_histograms.png).
+
+
+
+```{r}
+
+
+# Calculate mean or median
+mean_price <- mean(dataset$price, na.rm = TRUE)
+median_price <- median(dataset$price, na.rm = TRUE)
+
+# Create histogram without log scale
+ggplot(dataset, aes(x = price)) + 
+    geom_histogram(binwidth = 500, fill = "skyblue", color = "darkblue") +
+    geom_vline(xintercept = mean_price, color = "red", linetype = "dashed", size = 1) +
+    theme_minimal(base_size = 8) +
+    labs(title = "Distribution of Price",
+         subtitle = paste("Mean price:", round(mean_price, 2)),
+         x = "Price", 
+         y = "Count") +
+    theme(plot.title = element_text(size = 14, face = "bold"),
+          plot.subtitle = element_text(size = 12))
+
+
+```
+
+The histogram above shows the distribution of prices in our dataset. It seems like most of the prices are clustered in the lower range, indicating a right-skewed distribution. This is typical in retail datasets where a large number of low-cost items are sold compared to a few high-priced items.
+
+
+
+# Frequency of Top 10 Brands
+
+```{r}
+
+
+# Summarize data
+top_brands <- dataset %>%  
+  group_by(brand) %>%
+  summarise(Count = n()) %>%
+  arrange(desc(Count)) %>%
+  slice_head(n = 10)
+
+#Bar graph of top 10 brands that are frequent
+
+ggplot(top_brands, aes(x = reorder(brand, Count), y = Count)) +
+
+  geom_bar(stat = "identity", fill = "skyblue") +
+
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Frequency of Top 10 Brands",  
+       x = "Brand",
+       y = "Count")
+```
+
+
+Bar Plot for Categorical Variables: To visualize the frequency of categories in variables like brand. The distribution depicted by the bars shows a right-skewed tendency, with most of brands having a lower frequency count and a minority having much higher counts. This type of skewness is common in market statistics, where a few brands dominate presence or sales, dominating a larger number of less prevalent brands
+
+
+# Frequency of Top 10 Categories
+
+```{r}
+
+# Summarize data for top 10 categories
+top_categories <- dataset %>%  
+  group_by(category_code) %>%
+  summarise(Count = n()) %>%
+  arrange(desc(Count)) %>%
+  slice_head(n = 10)
+
+# Create a bar graph for top 10 categories
+ggplot(top_categories, aes(x = reorder(category_code, Count), y = Count)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Frequency of Top 10 Categories",  
+       x = "Category",
+       y = "Count")
+
+```
+
+
+The bar plot displays the distribution of categories in our dataset, revealing a concentration of frequencies among specific categories, indicating a right-skewed distribution. This pattern is frequently observed in consumer data, reflecting a market in which the majority of transactions are concentrated in a few popular categories, with the rest having far fewer occurrences. Analogous to examining price distributions in numerical data, the visualization aids in understanding the distribution of categorical variables such as category_code.Notably, "electronics.smartphone" has a relatively high count.
+
+# Another Basic summary and correlation for understanding
+
+```{r warning=FALSE}
+# Summary statistics for numerical variables
+summary(dataset)
+
+# Correlation matrix for numerical variables
+correlations <- cor(dataset[, sapply(dataset, is.numeric)])
+print(correlations)
+
+```
+
+Insights from Summary Statistics
+event_time: This column is character type and shows timestamps. We convert it to a Date or DateTime format for time series analysis or to extract features like day of week or hour of day.
+Numerical IDs (order_id, product_id, category_id, user_id): These seem to be identifiers. Their statistical summary might not be very informative for analysis, but these fields could be important for identifying unique transactions, products, categories, and users.
+category_code: Contains a significant number of missing values (28,737). The non-missing values provide product categories which could be useful for segmentation or grouping analyses.
+brand: Also has missing values (5,428) and is a key variable for brand-wise analysis.
+price: Shows a wide range (0 to 18,328.68). Understanding its distribution and relationship with other variables like brand or category_code could be insightful.
+column_name: Seems to have a constant value (0). If this column does not vary, it might not be useful for analysis.
+
+
+
+
+Correlation Matrix
+The correlation matrix shows low correlation coefficients among most variables, indicating weak linear relationships.
+user_id has a moderate positive correlation with order_id, which might suggest some pattern or relationship between users and order IDs.
+order_id and product_id (0.03950995): This shows a very weak positive correlation. It suggests that there's barely any linear relationship between the order ID and the product ID.
+order_id and category_id (-0.01920324): This is a very weak negative correlation, indicating almost no meaningful linear relationship between order ID and category ID.
+order_id and price (-0.04374089): Again, a very weak negative correlation, suggesting that there's no significant linear relationship between the order ID and the price of the product.
+order_id and user_id (0.47960433): This shows a moderate positive correlation. It suggests that there might be some linear relationship between the order ID and the user ID, possibly indicating that certain users are linked to specific orders.
+product_id and category_id (-0.02799193): A very weak negative correlation, indicating almost no linear relationship between product ID and category ID.
+product_id and price (-0.08004854): A weak negative correlation, suggesting a slight tendency for different products (by ID) to have different prices, but the relationship is not strong.
+product_id and user_id (0.02244055): A very weak positive correlation, indicating almost no linear relationship between product ID and user ID.
+category_id and price (0.16293907): A weak positive correlation, suggesting that there might be a slight tendency for different categories to have different price ranges.
+category_id and user_id (-0.01139278): A very weak negative correlation, indicating almost no linear relationship between category ID and user ID.
+price and user_id (-0.03711405): A very weak negative correlation, suggesting almost no linear relationship between the price of products and user ID.
+column_name: It seems like this column might be a placeholder or an error since it has NA (Not Available) for all correlations with other variables and a perfect correlation of 1 with itself. This is typical for a non-numeric or a constant column.
+
+
+
+# Processing for further Analysis
+
+```{r}
+# Converting 'event_time' to DateTime format
+dataset$event_time <- as.POSIXct(dataset$event_time, format = "%Y-%m-%d %H:%M:%S", tz = "UTC")
+
+```
+
+```{r}
+# Checking the structure and summary again
+str(dataset)
+summary(dataset)
+
+```
+
+
+
+```{r}
+# Now lets get back to checking duplicate rows and missing values, etc.
+# Check for duplicate rows
+dupe_rows <- dataset[duplicated(dataset), ]
+
+if(nrow(dupe_rows) > 0) {
+  print("Duplicate rows detected!")  
+  print(nrow(dupe_rows))
+} else {
+  print("No duplicate rows found.")
+}
+```
+
+
+
+```{r}
+# Filter invalid rows  and filter out rows with price less than or equal to zero. 
+dataset <- dataset %>%
+  filter(!is.na(event_time)) %>%
+  filter(price > 0)
+nrow(dataset) #Number of rows after deleting the rows with duplicates
+
+```
+
+
+
+
+```{r}
+# Aggregate  
+brand_orders <- dataset %>% 
+  group_by(brand) %>%
+  summarize(num_orders = n()) 
+print(brand_orders)
+```
+
+
+
+```{r}
+#Mean price for each category 
+
+category_price <- dataset %>% 
+  group_by(category_code) %>%
+  summarize(mean_price = mean(price))
+print(category_price)
+
+```
+
+# Time Series for number of orders in Year 2020
+
+```{r}
+
+
+# Filter data
+dataset <- dataset %>%
+  filter(event_time > "2020-01-01") 
+
+# Create date and aggregate orders 
+dataset <- dataset %>%
+  mutate(date = as.Date(event_time))
+
+orders_per_day <- dataset %>%
+  count(date)
+
+# Plot with customizations
+ggplot(orders_per_day, aes(x = date, y = n)) +
+  
+  # Blue line
+  geom_line(color = "blue") + 
+  
+  # Label
+  ggtitle("Orders per Day") +
+  
+  # X label
+  xlab("Year 2020") +
+  
+  # Y label
+  ylab("Number of Orders") +
+
+  # Theme
+  theme_minimal()
+```
+
+Time Series Analysis of Daily Orders in 2020
+
+The "Orders per Day" graph illustrates a time series of daily order counts for the year 2020. Observations from the graph include:
+
+Cyclical Fluctuations: A recurring pattern of peaks and troughs suggests a correlation with pay cycles ("ups") and month ends ("downs").
+Trend Over Time: Starting April, there is a noticeable upward trend, indicating an overall increase in daily orders as the year progresses.
+Significant Peaks: Exceptionally high peaks, particularly one in January and a substantial rise in July, may point to special events or promotions influencing order volumes.
+Stabilization and Surge: After an initial period of high variability, the order count stabilizes from April to June, followed by a sharp increase in July.
+COVID-19 Considerations: The year 2020's unique context of the COVID-19 pandemic likely impacted consumer behavior, potentially explaining the surge in online orders due to restrictions and lifestyle changes.
+
+
+# Barchart representing Peaks and Troughs
+
+
+```{r}
+ggplot(dataset, aes(x = event_time)) +
+  geom_histogram(aes(fill = ..count..)) +
+  scale_fill_gradient(low = "skyblue", high = "blue") +
+  labs(title = "Event Time Distribution", x = "Event Time", y = "Count") +
+  theme_minimal()
+
+```
+
+# Top 30 brands in the dataset by order count
+
+
+```{r}
+# Get top 30 brands
+top_brands <- dataset %>%  
+  count(brand) %>%
+  slice_max(order_by = n, n = 30)
+
+ggplot(top_brands, aes(x = brand, y = n)) +
+  geom_col(fill = "orange") +
+  ggtitle("Top 30 Brands by Order Count") +
+  xlab("Brand") +  # Label for the x-axis
+  ylab("Order Count") +  # Label for the y-axis
+  theme(axis.text.x = element_text(angle = 90))
+
+```
+
+# Converting the Event time variable and extracting time based features
+
+
+```{r}
+# Converting event_time to POSIXct format and extracting time-based features
+dataset$event_time <- as.POSIXct(dataset$event_time, format="%Y-%m-%d %H:%M:%S UTC", tz="UTC")
+dataset$year <- format(dataset$event_time, "%Y")
+dataset$month <- format(dataset$event_time, "%m")
+dataset$day_of_week <- format(dataset$event_time, "%u") # 1 = Monday, ..., 7 = Sunday
+dataset$hour_of_day <- format(dataset$event_time, "%H")
+
+```
+
+
+This chunk extracts the year, month, day of the week, and hour of the day from the event_time. These time-based features can be very useful as they allow us to capture patterns based on time (like seasonality, weekday vs. weekend behavior, etc.)
+
+
+#Grouping Users into segments
+
+```{r}
+# Grouping data by user_id to calculate purchase history metrics
+
+purchase_history <- dataset %>%
+  group_by(user_id) %>%
+  summarise(total_purchases = n_distinct(order_id),
+            average_purchase_value = mean(price, na.rm = TRUE),
+            recent_purchase = max(event_time))
+
+# Calculating days since the last purchase
+purchase_history$days_since_last_purchase <- as.numeric(difftime(max(dataset$event_time), 
+                                                                purchase_history$recent_purchase, 
+                                                                units = "days"))
+
+# Merging this information back into the main dataset
+dataset <- merge(dataset, purchase_history, by = "user_id")
+
+```
+
+This chunk uses dplyr to group the data by user_id and then calculates several metrics: the total number of unique purchases (total_purchases), the average purchase value (average_purchase_value), and the time of the most recent purchase (recent_purchase).
+It then calculates the number of days since the last purchase for each user. This is done by finding the difference in days between the most recent purchase of each user and the most recent purchase in the entire dataset.
+Finally, this information is merged back into the main dataset, enriching it with user-specific historical data, which is often crucial for predictive models in e-commerce contexts.
+
+This chunk removes columns that are no longer needed for modeling. These include the original event_time, order_id, product_id, category_id, category_code, and brand columns.
+The reason for dropping these columns is that they are either redundant (we have extracted all useful information from them) or not useful for prediction (like IDs that don't have predictive power).
+
+
+
+```{r}
+# Frequency encoding approach for 'category_code'
+category_freq <- prop.table(table(factor(dataset$category_code, levels = unique(dataset$category_code))))
+dataset$category_code_freq <- sapply(dataset$category_code, function(x) {
+    if (is.na(x)) {
+        return(0)
+    } else {
+        return(category_freq[as.character(x)])
+    }
+})
+
+# Alternative frequency encoding approach for 'brand'
+brand_freq <- prop.table(table(factor(dataset$brand, levels = unique(dataset$brand))))
+dataset$brand_freq <- sapply(dataset$brand, function(x) {
+    if (is.na(x)) {
+        return(0)
+    } else {
+        return(brand_freq[as.character(x)])
+    }
+})
+
+
+```
+
+This chunk applies frequency encoding to the category_code and brand columns. It calculates the frequency of each category and brand in the dataset.
+It then replaces each category and brand in the original dataset with its corresponding frequency. This helps in handling categorical variables with many unique values and can provide a meaningful way to include this information in the model.
+
+First, the code ensures that event_time is converted to a Date format. This is important for accurate date comparisons.
+Then, it defines cutoff_date as the date one month before the latest date in the dataset.
+The ifelse statement creates the will_purchase variable, where 1 indicates a purchase after the cutoff date (i.e., within the next month), and 0 otherwise.
+Lastly, it drops the event_time column as it's no longer needed after creating the target variable.
+
+
+# Unique users in our Dataset
+
+```{r}
+
+
+# Calculating the total number of unique users
+total_unique_users <- n_distinct(dataset$user_id)
+
+# Data Aggregation at User Level
+user_data <- dataset %>%
+  group_by(user_id) %>%
+  summarise(
+    number_of_orders = n_distinct(order_id),
+    total_spending = sum(price, na.rm = TRUE)
+  )
+
+# Viewing the total number of unique users
+print(paste("Total number of unique users:", total_unique_users))
+
+# Viewing the first few rows of the aggregated user data
+head(user_data)
+
+
+```
+
+
+# Calculating metrics at User level
+
+
+```{r}
+
+# Data Aggregation at User Level
+user_data <- dataset %>%
+  group_by(user_id) %>%
+  summarise(
+    total_spending = sum(price, na.rm = TRUE),
+    average_spending_per_order = mean(price, na.rm = TRUE),
+    number_of_orders = n()
+  )
+
+# Scaling the data
+user_data_scaled <- scale(user_data[,-1]) # Excluding user_id for scaling
+
+# Applying K-Means Clustering
+set.seed(123) # Set seed for reproducibility
+kmeans_result <- kmeans(user_data_scaled, centers = 4, nstart = 25) # Change 'centers' based on our requirement
+
+# Adding cluster information to the user data
+user_data$cluster <- kmeans_result$cluster
+
+# Viewing the first few rows of the clustered data
+head(user_data)
+
+
+
+```
+
+# Clustering
+
+
+```{r}
+
+# Analyzing cluster characteristics
+cluster_summary <- user_data %>%
+  group_by(cluster) %>%
+  summarise(
+    average_total_spending = mean(total_spending),
+    average_spending_per_order = mean(average_spending_per_order),
+    average_number_of_orders = mean(number_of_orders)
+  )
+
+# Print cluster summaries
+print(cluster_summary)
+
+# Visualizing the clusters
+ggplot(user_data, aes(x = number_of_orders, y = total_spending, color = as.factor(cluster))) +
+  geom_point() +
+  labs(title = "User Clusters", x = "number of orders", y = "Total Spending", color = "Cluster") +
+  theme_minimal()
+
+
+
+# Visualizing the clusters
+ggplot(user_data, aes(x = average_spending_per_order, y = total_spending, color = as.factor(cluster))) +
+  geom_point() +
+  labs(title = "User Clusters", x = "average_spending_per_order", y = "Total Spending", color = "Cluster") +
+  theme_minimal()
+
+```
+
+Cluster Density and Spread:
+The density of the points (how close they are to each other) and their spread (how far they stretch on the graph) give an idea of the variance within each cluster. A high density indicates that users within a cluster have similar spending behaviors.
+Cluster Centers:
+Ideally, we would also plot the centers of each cluster to see where the "average" user in each cluster lies on the graph. These are not shown but can be added to the plot for better interpretation.
+Cluster Characteristics:
+Cluster 1 (Red): These users seem to have a lower average spending per order and lower total spending. This cluster could represent "Occasional Shoppers" or "Budget-Conscious" shoppers.
+Cluster 2 (Green): Users in this cluster have a wide range of average spending but generally lower total spending. They might be "Selective Shoppers" who purchase infrequently but spend varying amounts when they do.
+Cluster 3 (Blue): This cluster has few users with very high total spending and also high average spending per order. These could be "Premium Shoppers" or "High-Value Customers."
+Outliers:
+There are some points that stand far away from others, especially in Cluster 3. These outliers can significantly affect the average values of the cluster and may need further investigation or different handling in the analysis.
+
+
+# Top 3 categories per each Cluster
+
+
+```{r}
+# Ensure user_data has the cluster assignments
+user_data <- user_data %>%
+  mutate(cluster = kmeans_result$cluster)
+
+# First, add the cluster assignments to the original dataset
+dataset_with_clusters <- dataset %>%
+  inner_join(user_data, by = "user_id")
+
+# Now we can group by cluster as well as other attributes
+cluster_attributes <- dataset_with_clusters %>%
+  group_by(cluster, category_code, brand) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  arrange(desc(count))
+
+# Printing the most common brands and categories per cluster
+print(cluster_attributes)
+
+# Adjusting n_top to 3
+n_top <- 3
+top_categories <- cluster_attributes %>%
+  group_by(cluster) %>%
+  slice_max(order_by = count, n = n_top) %>%
+  ungroup()
+
+# Visualizing the top 3 categories for each cluster
+ggplot(top_categories, aes(x = reorder(category_code, count), y = count, fill = as.factor(cluster))) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~cluster, scales = "free_y") +
+  labs(title = "Top 3 Categories per Cluster", x = "Category", y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+
+```
+
+
+Cluster 1 (Red): The 'electronics.smartphone' category has the highest count, indicating that users in this cluster are particularly interested in smartphones. The 'computers.notebook' and 'appliances.environment.vacuum' categories also appear, suggesting an interest in computing and home appliances.
+Cluster 2 (Green): This cluster has a relatively balanced distribution among the top categories, with 'computers.notebook' leading. It's followed by 'electronics.smartphone' and 'appliances.environment.vacuum', similar to Cluster 1, but with significantly lower counts.
+Cluster 3 (Blue): The 'appliances.environment.vacuum' and 'electronics.smartphone' categories are the most common, with a similar count. This suggests that users in Cluster 3 are interested in both home appliances and electronics, particularly smartphones.
+'Generic' Category: All clusters include purchases in the 'Generic' category, which are likely items with unspecified or missing category information. The presence of this category across all clusters indicates a data classification issue that could be investigated further.
+Cluster Comparisons: Cluster 1 has the highest counts in popular categories, suggesting they may be the most active or largest cluster. Cluster 2 has lower activity levels across these top categories. Cluster 3, while similar to Cluster 1 in terms of category interests, seems to have fewer purchases in each category, or it could indicate a smaller size of the cluster.
+
+
+# More User metrics for analysis
+
+```{r}
+
+
+
+# Calculating the number of orders and total amount spent by each user
+user_analysis <- dataset %>%
+  group_by(user_id) %>%
+  summarize(number_of_orders = n(), total_spent = sum(price)) %>%
+  arrange(desc(number_of_orders), desc(total_spent))
+
+# Identifying the top 50 users based on number of orders and total amount spent
+top_50_users <- head(user_analysis, 50)
+
+# Viewing the top 50 users
+top_50_users
+
+
+```
+
+
+# Top 50 Users on Total Amount spent
+
+
+```{r}
+# Bar plot for total amount spent
+ggplot(top_50_users, aes(x = reorder(user_id, total_spent), y = total_spent)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  theme_minimal() +
+  labs(title = "Top 50 Users by Total Amount Spent",
+       x = "User ID",
+       y = "Total Amount Spent") +
+  coord_flip() # Flipping coordinates for better readability
+
+```
+
+
+
+```{r}
+# Merging the top 50 users with the original dataset
+top_50_users_data <- dataset %>%
+  semi_join(top_50_users, by = "user_id")
+
+# Aggregating the total spending in each category for the top 30 users
+category_spending_top_50 <- top_50_users_data %>%
+  group_by(category_code) %>%
+  summarize(total_spent = sum(price)) %>%
+  arrange(desc(total_spent))
+
+# Viewing the spending by category
+category_spending_top_50
+
+```
+This chunk shows categories that top 50 Users have purchased.
+
+# Selecting Top 10 Users
+
+```{r}
+# Selecting the top 10 users
+top_10_users <- head(user_analysis, 10)
+
+# Merging the top 10 users with the original dataset
+top_10_users_data <- dataset %>%
+  semi_join(top_10_users, by = "user_id")
+
+
+```
+
+
+# Analysis of Top 10 Users and their category of purchasesa
+
+```{r}
+# Analyzing and plotting for each of the top 10 users
+for (user in top_10_users$user_id) {
+  user_data <- top_10_users_data %>%
+    filter(user_id == user) %>%
+    group_by(category_code) %>%
+    summarize(total_spent = sum(price)) %>%
+    arrange(desc(total_spent)) %>%
+    head(20) # Top 20 categories
+
+  # Creating a bar plot for each user
+  p <- ggplot(user_data, aes(x = reorder(category_code, total_spent), y = total_spent)) +
+    geom_bar(stat = "identity", fill = "skyblue") +
+    theme_minimal() +
+    labs(title = paste("Top 20 Categories for User", user),
+         x = "Category",
+         y = "Total Spent") +
+    coord_flip()
+  
+  print(p) # Displaying the plot
+}
+
+```
+
+
+
+```{r}
+dataset_with_clusters %>%
+  group_by(category_code) %>%
+  summarise(Count = n()) %>%
+  top_n(30, Count) %>%
+  ggplot(aes(x = reorder(category_code, Count), y = Count, fill = Count)) +
+  geom_bar(stat = "identity") +
+  scale_fill_gradient(low = "blue", high = "red") +  # Gradient color
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Frequency of Top 30 Product Categories")
+
+
+```
+
+
+
+```{r}
+# Check if 'cluster' column exists and inspect its first few values
+head(dataset$cluster)
+
+# If 'cluster' is a factor, convert it to character
+dataset_with_clusters$cluster <- as.character(dataset_with_clusters$cluster)
+
+# Now, filter out the smallest cluster
+smallest_cluster <- dataset_with_clusters %>% 
+  filter(cluster == '1')
+
+
+```
+
+
+Price:
+Range: Prices range from a minimum of $0.02 to a maximum of $1504.61, indicating a wide variety of products in terms of price.
+Average Purchase Value: On average, items cost about $78.51, but the median value of $39.33 suggests a right-skewed distribution (more low-priced items).
+Date (date, year, month, day_of_week, hour_of_day):
+These fields indicate when purchases were made. The latest purchase in the data is on 2020-07-14. The presence of year, month, day, and hour fields suggests potential for detailed time-based analysis, like determining peak purchase times.
+Total Purchases and Number of Orders:
+The average number of purchases per user is around 3.274, with a maximum of 48. This indicates varying levels of engagement among customers.
+The average number of orders is 5.413, suggesting some orders contain multiple items.
+Total Spending and Average Spending Per Order:
+Reflects the total and average expenditure per order. With an average spending of about $444.40 but a median of only $196.74, the data might be right-skewed, indicating that while most customers spend less, a few spend significantly more.
+Days Since Last Purchase:
+Indicates customer engagement. The mean of about 42.49 days suggests a moderate frequency of purchases in this cluster.
+Category and Brand Frequencies (category_code_freq, brand_freq):
+These might represent how often certain categories or brands are purchased within this cluster. Higher frequency values could indicate popular categories or brands.
+
+
+# RFM Analysis
+
+```{r}
+
+# Calculate Recency, Frequency, and Monetary values
+rfm_table <- smallest_cluster %>%
+  group_by(user_id) %>%
+  summarize(Recency = as.numeric(difftime(max(date), max(recent_purchase), units = "days")),
+            Frequency = n(),
+            Monetary = sum(total_spending))
+
+```
+
+
+
+```{r}
+# Score each metric (Here, using quantiles for scoring)
+rfm_table <- rfm_table %>%
+  mutate(R_Score = ntile(Recency, 5),
+         F_Score = ntile(Frequency, 5),
+         M_Score = ntile(Monetary, 5))
+
+```
+
+```{r}
+# Create a combined RFM score and segment customers
+# Higher scores are better, so we might invert the R score
+rfm_table <- rfm_table %>%
+  mutate(RFM_Score = (6 - R_Score) + F_Score + M_Score,
+         Segment = case_when(
+           RFM_Score >= 12 ~ 'Top Customers',
+           RFM_Score >= 9 ~ 'High Value',
+           RFM_Score >= 6 ~ 'Medium Value',
+           TRUE ~ 'Low Value'
+         ))
+
+
+head(rfm_table)
+```
+
+Top Customers (RFM Score >= 12):
+These are our most valuable customers.
+They have purchased recently, purchase frequently, and spent the most.
+Strategies: Focus on loyalty programs, upselling, and cross-selling to maintain their engagement.
+High Value (RFM Score >= 9 but < 12):
+Customers in this segment are valuable but might not score high in all three RFM metrics.
+They could be frequent buyers who spend less per purchase or recent customers who haven’t shopped frequently yet.
+Strategies: Encourage increased spending or more frequent purchases through targeted offers or promotions.
+Medium Value (RFM Score >= 6 but < 9):
+These customers are moderately engaged.
+They might be occasional shoppers or have made a few large purchases.
+Strategies: Engage with re-marketing campaigns, personalized communications, and offers to increase their purchase frequency or value.
+Low Value (RFM Score < 6):
+Customers with the lowest engagement, either due to infrequent purchases, low spending, or older purchase history.
+They might be one-time buyers or infrequent shoppers.
+Strategies: Reactivation campaigns, special offers to bring them back, or feedback surveys to understand their low engagement.
+
+
+
+
+
+```{r}
+mean(smallest_cluster$price)
+smallest_cluster$avg_spend <- ifelse(smallest_cluster$price > 78.50, 1, 0)
+
+splitIndex <- sample(c(1:dim(smallest_cluster)[1]), dim(smallest_cluster)[1]*0.7)
+train_cluster1 <- smallest_cluster[splitIndex,]
+test_cluster1 <- smallest_cluster[-splitIndex,]
+
+```
+
+
+# Market Basket Analysis
+
+```{r}
+
+
+#Dataset is 'smallest_cluster' and contains 'order_id' and 'product_id'
+#Convert the dataset to a suitable format for the Apriori algorithm
+
+# Creating a basket format dataset
+# Converting the list to a transaction class
+names(smallest_cluster)
+ <- smallest_cluster[ , c(5, 6, 7, 13)]
+head()
+trans <- as(, "transactions")
+
+# Now we can proceed with finding frequent itemsets and generating rules
+rules <- apriori(trans, parameter = list(supp = 0.10, conf = 0.2), target = "rules")
+
+# Viewing results
+rules.sorted = sort(rules, by = "confidence")
+inspect(head(rules.sorted))
+
+summary(rules.sorted)
+```
+
+
+Rule [1]: {category_code=electronics.smartphone} => {price=[74,1.5e+03]}
+Interpretation: Customers who buy electronics, specifically smartphones, are likely to spend between $74 and $1500. This rule suggests a common price range for smartphones in our dataset.
+Rule [2]: {price=[20.8,74)} => {total_purchases=[1,3)}
+Interpretation: Transactions where the price of items is between $20.8 and $74 are typically associated with customers who have made between 1 and 3 total purchases. This might indicate a purchasing pattern or customer segment that buys mid-priced items and has a relatively low frequency of purchases.
+Rule [3]: {} => {total_purchases=[1,3)}`
+Interpretation: This rule is a bit unusual as it has an empty left-hand side (LHS). It might suggest that, generally, most customers in our dataset fall into the category of making 1 to 3 total purchases, regardless of other factors.
+Rule [4]: {price=[74,1.5e+03]} => {total_purchases=[1,3)}
+Interpretation: Customers who purchase items in the price range of $74 to $1500 tend to have a total purchase count of between 1 and 3. This could imply that higher-priced items are bought infrequently.
+Rule [5]: {price=[0.02,20.8)} => {total_purchases=[1,3)}
+Interpretation: Transactions with item prices ranging from $0.02 to $20.8 are associated with customers having 1 to 3 total purchases. This suggests that lower-priced items are also bought by customers who do not purchase very frequently.
+Rule [6]: {category_code=Generic} => {total_purchases=[1,3)}
+Interpretation: Customers buying items from a generic category (or a category not specifically defined) tend to have a total purchase count of between 1 and 3. This might indicate a general buying pattern among customers purchasing generic items.
+
+
+
+
+
+
+# RFM Visualizations
+
+
+```{r}
+# change recent purchases to suitable date format
+dataset$recent_purchase <- as.Date(dataset$recent_purchase, format = "%Y-%m-%d")
+
+
+dataset$recent_purchase <- as.Date(dataset$recent_purchase)
+
+# Aggregate data for RFM analysis
+rfm_data <- dataset %>%
+  group_by(user_id) %>%
+  summarize(
+    Recency = as.numeric(max(recent_purchase)),
+    Frequency = n_distinct(order_id),
+    Monetary = sum(price, na.rm = TRUE)
+  )
+
+# Set the reference date for recency calculation
+reference_date <- max(rfm_data$Recency) + 1
+
+# Calculate Recency as the number of days since the last purchase
+rfm_data$Recency <- reference_date - rfm_data$Recency
+
+# Function to create custom segments for Frequency
+frequency_score <- function(x) {
+  if (x == 1) {
+    return(1)
+  } else if (x == 2) {
+    return(2)
+  } else if (x >= 3 & x <= 5) {
+    return(3)
+  } else {
+    return(4)
+  }
+}
+
+# Apply custom segmentation to Frequency
+rfm_data$Frequency_Score <- sapply(rfm_data$Frequency, frequency_score)
+
+# Segment Recency and Monetary using quantiles
+rfm_data$Recency_Score <- ntile(rfm_data$Recency, 4)
+rfm_data$Monetary_Score <- ntile(rfm_data$Monetary, 4)
+
+# Combine scores into a single string
+rfm_data$RFM_Segment <- paste0(rfm_data$Recency_Score, rfm_data$Frequency_Score, rfm_data$Monetary_Score)
+
+```
+
+
+# Heatmap of RFM
+
+```{r}
+# Create a table of counts for each RFM segment
+rfm_table <- table(rfm_data$RFM_Segment)
+
+# Convert the table to a dataframe for plotting
+rfm_score_counts <- as.data.frame(rfm_table)
+names(rfm_score_counts) <- c("RFM_Segment", "Count")
+
+# Melt the data for use with ggplot2
+rfm_melted <- melt(rfm_score_counts, id.vars = "RFM_Segment", value.name = "Count")
+
+# Plot the heatmap with improved visualization
+ggplot(rfm_melted, aes(x = RFM_Segment, y = variable, fill = Count)) +
+  geom_tile(color = "white") +
+  scale_fill_gradientn(colors = c("blue", "green", "yellow", "red"), 
+                       values = scales::rescale(c(0, 0.5, 0.75, 1))) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        axis.text.y = element_blank(),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "Enhanced Heatmap of Customer Distribution Across RFM Scores",
+       x = "RFM Segment",
+       y = "",
+       fill = "Count") +
+  guides(fill = guide_colorbar(title.position = "top", title.hjust = 0.5))
+
+```
+# Recency, Frequency and Monetary values of Unique Users
+
+```{r}
+# Count the number of customers in each RFM segment
+rfm_counts <- rfm_data %>%
+  group_by(RFM_Segment) %>%
+  summarise(Count = n())
+
+# Create a bar plot
+ggplot(rfm_counts, aes(x = reorder(RFM_Segment, -Count), y = Count, fill = RFM_Segment)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5),
+        plot.title = element_text(hjust = 0.5),
+        legend.position = "none") +
+  labs(title = "Customer Distribution Across RFM Segments",
+       x = "RFM Segment",
+       y = "Number of Customers")
+  
+```
+
+
+
+```{r}
+names(dataset_with_clusters)
+```
+
+
+
+```{r}
+# Filtering for Apple and Samsung Brands
+apple_samsung_data <- dataset_with_clusters %>%
+  filter(brand %in% c("apple", "samsung")) %>%
+  group_by(date, brand) %>%
+  summarize(DailyCount = n())
+
+head(apple_samsung_data)
+
+```
+
+# Additional finding - Apple vs Samsung 
+
+```{r}
+ggplot(apple_samsung_data, aes(x = as.Date(date), y = DailyCount, color = brand)) +
+  geom_line() +
+  labs(title = "Daily Purchases for Apple vs Samsung Over Time", x = "Date", y = "Daily Purchase Count") +
+  theme_minimal()
+
+```
+
+Comparative Analysis of Brand Performance Over Time
+
+The line graph illustrates the daily purchase counts for Apple and Samsung products, spanning from January to July. Observations are as follows:
+
+The blue line indicates Samsung's daily purchases, which consistently surpass Apple's, represented by the red line. This suggests a stronger daily sales performance from Samsung across the observed period.
+Apple's purchase counts are generally lower but experience occasional sharp increases, hinting at sporadic days with significantly higher sales.
+Samsung shows greater variability with several peaks, most notably a sharp increase as we approach July. This could indicate special sales events or new product releases.
+The comparative dynamics between the two brands reveal that while Samsung maintains a lead in daily purchases, Apple's peaks suggest successful sales drives or product launches that temporarily boost its numbers.
+This graph offers insights into the purchasing patterns of consumers for these two brands, with implications for marketing strategies, inventory planning, and understanding market trends.
+
+
+# Sales of Apple vs Brand in each Cluster
+
+
+```{r}
+
+
+# Preparing Data for Cluster Distribution Plot
+apple_samsung_cluster_data <- dataset_with_clusters %>%
+  filter(brand %in% c("apple", "samsung")) %>%
+  group_by(brand, cluster) %>%
+  summarize(Count = n())
+
+# Cluster Distribution Plot
+ggplot(apple_samsung_cluster_data, aes(x = brand, y = Count, fill = as.factor(cluster))) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(title = "Cluster Distribution for Apple and Samsung", x = "Brand", y = "Count") +
+  theme_minimal() +
+  scale_fill_discrete(name = "Cluster")
+
+
+```
+# Cluster Analysis
+
+
+```{r}
+## Time Series Analysis of Cluster Purchases
+
+#To see which cluster has more purchases over time, we will create a time series plot. This will show the number of purchases for each cluster across the specified time period.
+
+cluster_time_series <- dataset_with_clusters %>%
+  group_by(date, cluster) %>%
+  summarize(DailyPurchases = n())
+
+head(cluster_time_series)
+
+```
+# Time series for Each Cluster
+
+
+```{r}
+ggplot(cluster_time_series, aes(x = as.Date(date), y = DailyPurchases, color = as.factor(cluster))) +
+  geom_line() +
+  labs(title = "Daily Purchases by Cluster Over Time", x = "Date", y = "Daily Purchases") +
+  theme_minimal() +
+  scale_color_discrete(name = "Cluster")
+
+```
+
+
+
+
+```{r}
+# Check for missing values
+summary(dataset_with_clusters)
+
+```
+
+
+
+```{r}
+
+dataset_with_clusters <- na.omit(dataset_with_clusters)
+```
+
+# Users who purchased a smarphone vs users who did not from starting of time in this dataset
+
+```{r}
+
+reference_date <- as.Date("2020-02-01") 
+
+# Aggregate data at the user level
+user_aggregated_data <- dataset_with_clusters %>%
+  group_by(user_id) %>%
+  summarize(purchased_smartphone = any(date > (reference_date) & grepl("smartphone", category_code, ignore.case = TRUE)))
+
+# Check the distribution of the target variable
+table(user_aggregated_data$purchased_smartphone)
+
+
+```
+
+
+
+since February 1, 2020, 6,569 users have purchased at least one smartphone, while 20,291 users have not made any smartphone purchases. This information is crucial for understanding the user behavior in our dataset and will be the foundation for any predictive modeling we plan to do. It also highlights the class ilance in our target variable, which is an important aspect to consider in our modeling strategy.
+
+
+# Non smarphone purchaser users, if they have spent more than average of smartphone purchasers = 1
+
+```{r}
+
+reference_date <- as.Date("2020-02-01") 
+
+# Calculate mean spending for users who purchased a smartphone after the reference date
+mean_spending_smartphone_purchasers <- dataset_with_clusters %>%
+  filter(date > reference_date & grepl("smartphone", category_code, ignore.case = TRUE)) %>%
+  summarize(mean_price = mean(price, na.rm = TRUE)) %>%
+  pull(mean_price)
+
+# Aggregate data at the user level with mean spending and smartphone purchase indicator
+user_aggregated_data <- dataset_with_clusters %>%
+  group_by(user_id) %>%
+  summarize(
+    mean_spending = mean(price, na.rm = TRUE),
+    purchased_smartphone = any(date > reference_date & grepl("smartphone", category_code, ignore.case = TRUE))
+  ) %>%
+  mutate(higher_spending_non_buyer = ifelse(!purchased_smartphone & mean_spending > mean_spending_smartphone_purchasers, 1, 0))
+
+# Check the distribution of the new variable
+table(user_aggregated_data$higher_spending_non_buyer)
+
+```
+
+
+
+```{r}
+
+summary(user_aggregated_data)
+
+```
+
+# Visualization
+
+```{r}
+#Table of frequencies stored as 'frequency_table'
+frequency_table <- data.frame(
+  higher_spending_non_buyer = c(0, 1),
+  count = c(24636, 2224)
+)
+
+
+
+# Create the bar chart with color
+ggplot(frequency_table, aes(x = as.factor(higher_spending_non_buyer), y = count, fill = as.factor(higher_spending_non_buyer))) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c("blue", "red"), labels = c("Avg less than smartphone buyers", "Avg higher than smartphone buyers")) +
+  labs(x = "Higher Spending Non-Buyer", y = "Number of Users",
+       title = "Non Smartphone buyers with an average spending more than smartphone buyers",
+       fill = "Category") +
+  theme_minimal()
+
+
+```
+
+# Top 10 Non smartphone purchasing users with a higher average than smartphone buyers
+
+```{r}
+
+
+# Define the number of top spenders we want to display
+top_n_spenders <- 10
+
+# Filter for users with higher_spending_non_buyer equal to 1 and arrange by mean_spending
+higher_spending_non_buyers <- user_aggregated_data %>%
+  filter(higher_spending_non_buyer == 1) %>%
+  arrange(desc(mean_spending)) %>%
+  slice(1:top_n_spenders) # Select only the top N spenders
+
+# Visualize the top N higher spending non-buyers
+ggplot(higher_spending_non_buyers, aes(x = reorder(as.character(user_id), mean_spending), y = mean_spending, fill = as.character(user_id))) +
+  geom_bar(stat = "identity") +
+  labs(x = "User ID", y = "Mean Spending",
+       title = paste("Top", top_n_spenders, "Non smartphone buyers with high spending")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), # Rotate x-axis labels for readability
+        legend.title = element_blank()) 
+
+```
+
+
+
+
+
