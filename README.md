@@ -1,4 +1,4 @@
-**#Data Mining and Marketing Analytics: Understanding E-Commerce Customer Behavior**
+**Data Mining and Marketing Analytics: Understanding E-Commerce Customer Behavior**
 
 
 This project leverages data mining techniques to analyze customer purchasing behaviors in an e-commerce environment. The goal is to uncover patterns that drive customer value, enabling businesses to optimize their marketing strategies and improve customer engagement.
